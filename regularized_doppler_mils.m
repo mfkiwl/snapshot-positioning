@@ -12,7 +12,9 @@ function [ellHat, bHat, resid, ns, iter_ell, rt] = regularized_doppler_mils(ellB
 
 %%% TODO: TRY TO DETECT WHEN INTEGERS STOP UPDATING AND THEN TRY TO SOLVE
 %%% BETTER WITHOUT THE REGULARIZATION.
-tic
+rt = struct();
+rt.total_elapsed = 0;
+rt.count = 0;
 
 N_UNKNOWNS = 5;
 FILTER_LOW_SATS = 1; % TODO!!!
@@ -39,14 +41,15 @@ niter = 3;                      % number of iterations
 d_coarse = 76.5e-3;             % average value for signal time-of-flight satellite to earth surface
 sigmaCode = 10e-9;              % code phase std
 sigmaA     = 100e3/c;
-sigmaD = 20e3/c;
+sigmaD = 1800e3/c;
+sigmaDopPerIter = [sigmaA, sigmaA, sigmaD];
 
 N_sats = numel(sats);
 
 % Weight matrix for DOP-MILS
 w = zeros(2*N_sats, 1);
 w(1:N_sats,1)   = (1/sigmaCode) * ones(N_sats,1);
-w(N_sats+1:2*N_sats) = (1/sigmaD   ) * ones(N_sats,1);
+w(N_sats+1:2*N_sats) = (1/sigmaA   ) * ones(N_sats,1);
 W = diag(w);
 
 %%%%%%%%%%%%%
@@ -87,7 +90,12 @@ if ASSUME_HEIGHT % need at least 5 rows in the matrix for 5 variables, but can d
     W = diag(fix_W);
 end
 
+tic;
+
 [x, ns] = smils(W*[A_top; A_bot] , W*[B_top; B_bot] ,W*[rhs_top; rhs_bot]);
+
+rt.total_elapsed = rt.total_elapsed + toc;
+rt.count = rt.count + 1;
 
 % according to x and ns set the initial guess
 ellHat = ellBar + x(1:3);
@@ -102,7 +110,7 @@ for it = 1:niter
     % Weight matrix for DOP-MILS
     w = zeros(2*N_sats, 1);
     w(1:N_sats,1)   = (1/sigmaCode) * ones(N_sats,1);
-    w(N_sats+1:2*N_sats) = (1/sigmaD   ) * ones(N_sats,1);
+    w(N_sats+1:2*N_sats) = (1/sigmaDopPerIter(it)   ) * ones(N_sats,1);
     W = diag(w);
     
     [distances, ~, satspos] = model(ellHat, tDhat, sats, Eph); % for improving transmit times
@@ -135,7 +143,7 @@ for it = 1:niter
     B_bot = zeros(N_sats);
     
     rhs_top = (ns + code_phase_obs)*tcode - distances_rot/c - trops/c + correction_times - bHat;
-    rhs_bot = -doppler_obs - range_rates - c*fdHat;
+    rhs_bot = -doppler_obs - range_rates - fdHat;
     
     if ASSUME_HEIGHT % need at least 5 rows in the matrix for 5 variables, but can do it with 4 satellites
         A_top = [A_top; [ellBar'/norm(ellBar) 0 0]];
@@ -146,8 +154,13 @@ for it = 1:niter
         W = diag(fix_W);
     end
     
+    tic;
+    
     [x, ns_corr] = smils(W*[A_top;A_bot] , W*[B_top; B_bot] ,W*[rhs_top; rhs_bot]);
 
+    rt.total_elapsed = rt.total_elapsed + toc;
+    rt.count = rt.count + 1;
+    
     ellHat = ellHat + x(1:3);
     bHat = bHat + x(4);
     fdHat = fdHat + x(5);
@@ -156,11 +169,11 @@ for it = 1:niter
     iter_ell = [iter_ell ellHat];
 end
 resid = norm([rhs_top; rhs_bot]);
-rt = toc;
 
-[ellHat, bHat, resid, ns, iter_ell2, rt_nested] = regularized_mils(ellHat, presumed_time - bHat, code_phase_obs, sats, Eph, ns);
-iter_ell = [iter_ell iter_ell2];
 
-rt = rt + rt_nested;
+% [ellHat, bHat, resid, ns, iter_ell2, rt_nested] = regularized_mils(ellHat, presumed_time - bHat, code_phase_obs, sats, Eph, ns);
+% iter_ell = [iter_ell iter_ell2];
+% 
+% rt = rt + rt_nested;
 end
 
